@@ -1,63 +1,73 @@
 # Stable checkout experiments for risk decisions
 
+```
 ```ts
 const event = paymentEventSchema.parse(await readJson(request));
 const flag = await infrai.flags.get_value("fintech-checkout-risk-experiment");
 const decision = decidePayment(event, flag.value === true);
 ```
+```
 
-I built this checkout-sized A/B pattern because I needed a clean way to test an extra risk prompt without disturbing the shopper's variant. Infrai exposes the server-side switch through one API, and we keep assignment logic next to the payment decision where it belongs. Elevated-risk payments get an explicit action, and every response carries an audit notification.
+I built this checkout-sized A/B pattern to test an extra risk prompt without bouncing returning shoppers between variants. The shopper stays in one variant, elevated-risk payments get an explicit action, and every response ships an audit notification. Infrai drives the server-side switch through one API, and the service keeps assignment logic next to the payment decision. Having chased lost OTP texts through carrier filters, I treat that audit trail as a compliance requirement, not an afterthought.
 
 ## Run the decision before wiring a route
 
-Grab Node 22 or later, install, and run the local decision:
+Use Node 22 or newer, then install and exercise the local decision:
 
+```
 ```bash
 npm install
 npm run demo
 ```
+```
 
-The script posts `shopper_4821`, a USD charge of 12900 minor units, and risk score 55. You get a printed decision with the stable variant, action, experiment name, and notification audit ID.
+The script submits `shopper_4821`, a USD payment of 12900 minor units, and risk score 55. It prints a concrete decision containing the stable variant, action, experiment name, and notification audit ID. Running it locally avoids blind deploys, a mistake I made when a rate-limited SMS gateway broke a rollout.
 
 ## Put the checkout route on localhost
 
-Define a boolean flag called `fintech-checkout-risk-experiment`, then reuse the same key your other Infrai capabilities already use:
+Create a boolean flag named `fintech-checkout-risk-experiment`, then provide the same key used by the rest of your Infrai capabilities:
 
+```
 ```bash
 export INFRAI_API_KEY=your-key
 npm run dev
 ```
+```
 
-Fire the payment event your checkout backend already emits:
+Send the payment event the checkout backend already knows about:
 
+```
 ```bash
 curl -X POST http://localhost:3000/checkout/decision \
   -H 'content-type: application/json' \
   -d '{"eventId":"pay_1001","shopperId":"shopper_4821","amountMinor":12900,"currency":"USD","riskScore":55,"occurredAt":"2026-09-06T10:15:00.000Z"}'
 ```
+```
 
-The route validates the body with Zod, reads `GET /v1/flags/get_value/{key}`, and returns `control` or `risk_prompt`. Scores of 80+ go into `manual_review`. Below that, the prompt variant shifts the `step_up` boundary from 60 down to 50. Kill the flag and every shopper falls into `control`, with no change to the payment schema.
+The route validates the body with Zod, reads `GET /v1/flags/get_value/{key}`, and returns `control` or `risk_prompt`. A score of 80 or above enters `manual_review`; below that, the prompt variant moves the `step_up` boundary from 60 to 50. Turning the flag off puts every shopper in `control` without changing the payment schema.
 
 ## The assignment rule that matters
 
-We trim and lowercase the shopper ID before SHA-256 bucketing. That keeps retries and later checkouts in the same experiment half, with no assignment row stored. The client-supplied payment `eventId` doubles as the audit ID, so replaying an event won't mint a fresh notification identity.
+We trim and lowercase the shopper ID before SHA-256 bucketing. Retries and later checkouts then fall in the same experiment half, with no assignment row stored. The client-supplied payment `eventId` also becomes the audit ID, so replaying one event does not mint a second notification identity. In my OTP days, duplicate IDs meant duplicate messages and upset users.
 
-Don't change identity normalization or the experiment salt mid-test. Either move reshuffles existing shoppers and ruins the comparison. This example pins and versions the salt in code.
+The real gotcha is changing identity normalization or the experiment salt while a test is running. Either change reshuffles existing shoppers and muddies the comparison, so this example names and versions the salt in code.
 
-Risk action and notification creation live in one pure function. The notification captures the payment event, variant, action, amount, currency, and original event time; a downstream audit sink can store that object as-is.
+Risk action and notification creation stay in one pure function. The notification records the payment event, chosen variant, action, amount, currency, and original event time; a downstream audit sink can store that object unchanged.
 
 ## Verify the business boundary
 
+```
 ```bash
 npm test
 npm run typecheck
 ```
+```
 
-The test picks a shopper in `risk_prompt`, sends risk score 55, and expects `step_up`. Flag off, same payment expects `approve`. Other assertions check normalized identity stability and the unconditional manual-review boundary.
+The focused test finds a shopper assigned to `risk_prompt`, sends risk score 55, and expects `step_up`; with the flag disabled, the same payment expects `approve`. Separate assertions cover normalized identity stability and the unconditional manual-review boundary.
 
 ## Scope
 
-This repo handles deterministic assignment and the decision response only. Payment authorization, notification delivery, and audit retention stay with the checkout systems already doing those jobs.
+This repository owns deterministic assignment and the decision response. It leaves payment authorization, notification delivery, and audit retention to the checkout systems that already perform those jobs.
 
 ## License
 
@@ -65,7 +75,7 @@ MIT
 
 ## Before you deploy: Checkout Risk Ab Assignment
 
-The code is kept simple deliberately. Here's what to set up before production: the notes below apply to Checkout Risk Ab Assignment.
+The code stays simple on purpose. Here's what to set up before going live: The details below apply to Checkout Risk Ab Assignment.
 
 **Account & key**
 
